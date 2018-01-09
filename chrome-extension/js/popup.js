@@ -1,44 +1,63 @@
 'use strict';
-
-window.addEventListener("message", function(event) {
-  // We only accept messages from ourselves
-  if (event.source != window)
-      return;
-
-  if (event.data.type && (event.data.type == "FROM_PAGE")) {
-      console.log("Content script received message: " + event.data.text);
-  }
-});
-
+var formInfo;
 
 document.addEventListener('DOMContentLoaded', function () {
   var notifyPage = document.getElementById('notify-page');
+  var formFill = document.getElementById('form-fill');
   var pubkey;
   var privkey;
   var encrypted;
   openpgp.config.aead_protect = true;
 
-  encryptMessage('Hello world', getPubKey()).then(function(ciphertext) {
-    encrypted = ciphertext;
-    console.log(encrypted);
-  });
+
+  chrome.runtime.onMessage.addListener(
+    function(request, sender, sendResponse) {
+      formInfo = request;
+      if (formInfo.fields && formInfo.key) {
+        pubkey = formInfo.key;
+        createFields(formInfo.fields, formFill);
+      }
+    }
+  );
+
+  var loginInfo = {
+    name: 'admin',
+    password: 'admin'
+  };
 
   notifyPage.addEventListener('click', function () {
-    chrome.tabs.getSelected(null, function (tab) {
-      var privKeyObj = openpgp.key.readArmored(getPrivKey()).keys[0];
-      privKeyObj.decrypt('super long and hard to guess secret');
-
-      openpgp.decrypt({
-        message: openpgp.message.readArmored(encrypted),     // parse armored message
-        publicKeys: openpgp.key.readArmored(getPubKey()).keys,    // for verification (optional)
-        privateKey: privKeyObj // for decryption
-      }).then(function(plaintext) {
-        console.log(plaintext);
-      });
-
+    console.log(fetchFromContainer(formFill));
+    encryptMessage(JSON.stringify(fetchFromContainer(formFill)), pubkey).then(function(ciphertext) {
+      sendToBrowser(ciphertext);
+      // close();
     });
   });
 });
+
+function fetchFromContainer(container) {
+  var formInfo = {};
+  console.log(container.querySelectorAll('div input'));
+  container.querySelectorAll('div input').forEach(function(input) {
+    formInfo[input.getAttribute('id')] = input.value;
+  });
+  return formInfo;
+}
+
+function createFields(fields, container) {
+  fields.forEach(function (field, key) {
+    var div = document.createElement('div');
+    var input = document.createElement('input');
+    input.setAttribute('type', field.type);
+    input.setAttribute('id', field.name);
+    div.appendChild(input);
+    container.appendChild(div);
+  });
+}
+
+function sendToBrowser(data) {
+  var port = chrome.extension.connect();
+  port.postMessage({data: data});
+}
 
 function encryptMessage(message, pubkey) {
   return openpgp.encrypt({
@@ -46,6 +65,19 @@ function encryptMessage(message, pubkey) {
     publicKeys: openpgp.key.readArmored(pubkey).keys
   }).then(function(ciphertext) {
     return ciphertext.data;
+  });
+}
+
+function decryptMessage(encrypted) {
+  var privKeyObj = openpgp.key.readArmored(getPrivKey()).keys[0];
+  privKeyObj.decrypt('super long and hard to guess secret');
+
+  openpgp.decrypt({
+    message: openpgp.message.readArmored(encrypted),     // parse armored message
+    publicKeys: openpgp.key.readArmored(getPubKey()).keys,    // for verification (optional)
+    privateKey: privKeyObj // for decryption
+  }).then(function(plaintext) {
+    console.log(JSON.parse(plaintext.data));
   });
 }
 
